@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="testnugetcpp.vcxproj" Id="3b168201-e903-449e-bb03-79140a5c656c" />
+</Solution>

@@ -32,6 +32,7 @@ static int fpsIndex = 3; // default 240
 static int cellSize = 80; // 60-120
 static int gridWidth = 10; // 5-40
 static int gridHeight = 10; // 5-40
+static int fruitCount = 1; // 1-15
 static int speedOptions[] = { 180, 120, 80 }; // easy, medium, hard
 static const wchar_t* speedNames[] = { L"Easy", L"Medium", L"Hard" };
 static int speedIndex = 1; // default medium (was 0!)
@@ -55,7 +56,7 @@ static int pauseSelection = 0; // 0=Resume, 1=Menu
 static int gameOverSelection = 0; // 0=Restart, 1=Menu
 static std::deque<Pt> currSnake;
 static std::deque<Pt> prevSnake;
-static Pt food{ 0,0 };
+static std::vector<Pt> food; // multiple food items
 static Direction dir = RIGHT;
 static Direction nextDir = RIGHT; // FIXED: queue next direction
 static bool gameOver = false;
@@ -115,19 +116,75 @@ static Pt moveHead(const Pt& h, Direction d) {
 static void placeFoodLocked() {
     // caller holds stateMtx, but we need rngMtx for RNG
     std::lock_guard<std::mutex> lk(rngMtx);
-    while (true) {
+
+    food.clear();
+    int numFood = min(fruitCount, GRID_W * GRID_H - (int)currSnake.size());
+
+    for (int i = 0; i < numFood; i++) {
+        int attempts = 0;
+        while (attempts < 1000) {
+            Pt p{ distW(rng), distH(rng) };
+            bool valid = true;
+
+            // Check if on snake
+            for (auto& s : currSnake) {
+                if (s.x == p.x && s.y == p.y) {
+                    valid = false;
+                    break;
+                }
+            }
+
+            // Check if on existing food
+            if (valid) {
+                for (auto& f : food) {
+                    if (f.x == p.x && f.y == p.y) {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if (valid) {
+                food.push_back(p);
+                break;
+            }
+            attempts++;
+        }
+    }
+}
+
+static void placeOneFoodLocked() {
+    // Place a single new fruit (when one is eaten)
+    std::lock_guard<std::mutex> lk(rngMtx);
+
+    int attempts = 0;
+    while (attempts < 1000) {
         Pt p{ distW(rng), distH(rng) };
-        bool on = false;
+        bool valid = true;
+
+        // Check if on snake
         for (auto& s : currSnake) {
             if (s.x == p.x && s.y == p.y) {
-                on = true;
+                valid = false;
                 break;
             }
         }
-        if (!on) {
-            food = p;
+
+        // Check if on existing food
+        if (valid) {
+            for (auto& f : food) {
+                if (f.x == p.x && f.y == p.y) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if (valid) {
+            food.push_back(p);
             break;
         }
+        attempts++;
     }
 }
 
@@ -222,15 +279,26 @@ static void gameThreadFunc() {
                 }
                 else {
                     currSnake.push_front(newHead);
-                    if (newHead.x == food.x && newHead.y == food.y) {
-                        score += 10;
 
+                    // Check if ate any food
+                    bool ateFood = false;
+                    for (auto it = food.begin(); it != food.end(); ++it) {
+                        if (newHead.x == it->x && newHead.y == it->y) {
+                            score += 10;
+                            food.erase(it);
+                            ateFood = true;
+                            break;
+                        }
+                    }
+
+                    if (ateFood) {
                         // Check if won (snake fills entire grid)
                         if (currSnake.size() >= (size_t)(GRID_W * GRID_H)) {
                             gameWon = true;
                         }
                         else {
-                            placeFoodLocked();
+                            // Place only ONE new fruit to replace the eaten one
+                            placeOneFoodLocked();
                         }
                     }
                     else {
@@ -261,7 +329,7 @@ static FPt lerp(const FPt& a, const FPt& b, float t) {
 struct RenderSnapshot {
     std::vector<FPt> prev;
     std::vector<FPt> curr;
-    FPt food;
+    std::vector<FPt> food;
     int score;
     bool gameOver;
     bool gameWon;
@@ -276,6 +344,7 @@ struct RenderSnapshot {
     int cellSize;
     int gridWidth;
     int gridHeight;
+    int fruitCount;
     int speedIndex;
     std::chrono::steady_clock::time_point tickTime;
     std::chrono::milliseconds tickDur;
@@ -365,11 +434,12 @@ static void renderThreadFunc() {
             std::lock_guard<std::mutex> lk(stateMtx);
             snap.prev.clear();
             snap.curr.clear();
+            snap.food.clear();
 
             for (auto& p : prevSnake) snap.prev.push_back({ float(p.x), float(p.y) });
             for (auto& p : currSnake) snap.curr.push_back({ float(p.x), float(p.y) });
+            for (auto& f : food) snap.food.push_back({ float(f.x), float(f.y) });
 
-            snap.food = { float(food.x), float(food.y) };
             snap.score = score;
             snap.gameOver = gameOver;
             snap.gameWon = gameWon;
@@ -384,6 +454,7 @@ static void renderThreadFunc() {
             snap.cellSize = cellSize;
             snap.gridWidth = gridWidth;
             snap.gridHeight = gridHeight;
+            snap.fruitCount = fruitCount;
             snap.speedIndex = speedIndex;
             snap.tickTime = lastTickTime;
             snap.tickDur = tickDuration;
@@ -462,16 +533,16 @@ static void renderThreadFunc() {
                 // Settings button
                 startY += buttonSpacing;
                 RECT settingsRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
-                HBRUSH settingsBrush = CreateSolidBrush(snap.menuSelection == 1 ? RGB(40, 160, 40) : RGB(30, 140, 30));
+                HBRUSH settingsBrush = CreateSolidBrush(snap.menuSelection == 1 ? RGB(50, 200, 50) : RGB(40, 170, 40));
                 FillRect(memDC, &settingsRect, settingsBrush);
                 DeleteObject(settingsBrush);
-                buttonPen = CreatePen(PS_SOLID, snap.menuSelection == 1 ? 3 : 2, RGB(70, 180, 70));
+                buttonPen = CreatePen(PS_SOLID, snap.menuSelection == 1 ? 3 : 2, RGB(90, 220, 90));
                 oldButtonPen = (HPEN)SelectObject(memDC, buttonPen);
                 SelectObject(memDC, GetStockObject(NULL_BRUSH));
                 Rectangle(memDC, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom);
                 SelectObject(memDC, oldButtonPen);
                 DeleteObject(buttonPen);
-                SetTextColor(memDC, RGB(180, 180, 180));
+                SetTextColor(memDC, RGB(220, 220, 220));
                 DrawTextW(memDC, L"Settings", -1, &settingsRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
                 // Exit button
@@ -556,9 +627,17 @@ static void renderThreadFunc() {
                 SetTextColor(memDC, snap.settingSelection == 4 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, speedNames[snap.speedIndex], (int)wcslen(speedNames[snap.speedIndex]));
 
+                // Fruit Count
+                startY += rowHeight;
+                SetTextColor(memDC, snap.settingSelection == 5 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"Fruit Count:", 12);
+                std::wstring fruitVal = std::to_wstring(snap.fruitCount);
+                SetTextColor(memDC, snap.settingSelection == 5 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, fruitVal.c_str(), (int)fruitVal.size());
+
                 // Back button
                 startY += rowHeight + 20;
-                SetTextColor(memDC, snap.settingSelection == 5 ? RGB(220, 90, 90) : RGB(180, 180, 180));
+                SetTextColor(memDC, snap.settingSelection == 6 ? RGB(220, 90, 90) : RGB(180, 180, 180));
                 RECT backRect = { 0, startY, GRID_W * CELL, startY + 30 };
                 DrawTextW(memDC, L"< Back to Menu", -1, &backRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -579,14 +658,18 @@ static void renderThreadFunc() {
                 }
                 SelectObject(memDC, oldPen);
 
-                // Food
-                RECT fr = {
-                    int(snap.food.x * CELL),
-                    int(snap.food.y * CELL),
-                    int(snap.food.x * CELL + CELL),
-                    int(snap.food.y * CELL + CELL)
-                };
-                FillRect(memDC, &fr, cache.foodBrush);
+                // Food - draw all food items
+                HBRUSH foodBrush = CreateSolidBrush(RGB(255, 70, 70));
+                for (auto& f : snap.food) {
+                    RECT fr = {
+                        int(f.x * CELL),
+                        int(f.y * CELL),
+                        int(f.x * CELL + CELL),
+                        int(f.y * CELL + CELL)
+                    };
+                    FillRect(memDC, &fr, foodBrush);
+                }
+                DeleteObject(foodBrush);
 
                 // Snake with interpolation
                 size_t nSegments = snap.curr.size();
@@ -961,11 +1044,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             switch (wParam) {
             case VK_UP:
             case 'W':
-                settingSelection = (settingSelection - 1 + 6) % 6;
+                settingSelection = (settingSelection - 1 + 7) % 7;
                 break;
             case VK_DOWN:
             case 'S':
-                settingSelection = (settingSelection + 1) % 6;
+                settingSelection = (settingSelection + 1) % 7;
                 break;
             case VK_LEFT:
             case 'A':
@@ -984,6 +1067,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 else if (settingSelection == 4) { // Speed
                     speedIndex = (speedIndex - 1 + 3) % 3;
+                }
+                else if (settingSelection == 5) { // Fruit Count
+                    fruitCount = max(1, fruitCount - 1);
                 }
                 break;
             case VK_RIGHT:
@@ -1004,12 +1090,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 else if (settingSelection == 4) { // Speed
                     speedIndex = (speedIndex + 1) % 3;
                 }
+                else if (settingSelection == 5) { // Fruit Count
+                    fruitCount = min(15, fruitCount + 1);
+                }
                 break;
             case VK_RETURN:
             case VK_SPACE:
             case VK_ESCAPE:
                 // Back to menu
-                if (settingSelection == 5 || wParam == VK_ESCAPE) {
+                if (settingSelection == 6 || wParam == VK_ESCAPE) {
                     gameState = MENU;
                     menuSelection = 0;
                 }

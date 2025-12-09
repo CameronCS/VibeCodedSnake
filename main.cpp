@@ -16,12 +16,25 @@
 //
 // Config
 //
-constexpr int CELL = 40;
-constexpr int GRID_W = 10;
-constexpr int GRID_H = 10;
-constexpr int WIN_EXTRA_H = 40;
-constexpr std::chrono::milliseconds TICK_INTERVAL_MS(120);
-constexpr std::chrono::milliseconds RENDER_FRAME_MS(4); // ~250 FPS (was 0!)
+static int CELL = 40;
+static int GRID_W = 10;
+static int GRID_H = 10;
+static constexpr int WIN_EXTRA_H = 40;
+static int TICK_INTERVAL_MS_VALUE = 120; // medium speed
+static int TARGET_FPS = 240;
+
+//
+// Settings options
+//
+static int settingSelection = 0; // which setting is selected
+static int fpsOptions[] = { 60, 120, 180, 240 };
+static int fpsIndex = 3; // default 240
+static int cellSize = 40; // 10-80
+static int gridWidth = 10; // 5-40
+static int gridHeight = 10; // 5-40
+static int speedOptions[] = { 180, 120, 80 }; // easy, medium, hard
+static const wchar_t* speedNames[] = { L"Easy", L"Medium", L"Hard" };
+static int speedIndex = 1; // default medium (was 0!)
 
 //
 // Types
@@ -31,7 +44,7 @@ struct FPt { float x, y; };
 
 enum Direction { UP, DOWN, LEFT, RIGHT };
 
-enum GameState { MENU, PLAYING };
+enum GameState { MENU, SETTINGS, PLAYING };
 
 //
 // Shared game state
@@ -51,7 +64,7 @@ static bool started = false; // NEW: game hasn't started yet
 static int score = 0;
 
 static std::chrono::steady_clock::time_point lastTickTime = std::chrono::steady_clock::now();
-static std::chrono::milliseconds tickDuration = TICK_INTERVAL_MS;
+static std::chrono::milliseconds tickDuration = std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
 
 static std::mutex stateMtx;
 static std::mutex rngMtx; // FIXED: separate mutex for RNG
@@ -63,6 +76,26 @@ static std::uniform_int_distribution<int> distW(0, GRID_W - 1);
 static std::uniform_int_distribution<int> distH(0, GRID_H - 1);
 
 static HWND g_hwnd = nullptr;
+
+//
+// Resize window to match current grid settings
+//
+static void resizeWindow() {
+    if (g_hwnd) {
+        int winW = GRID_W * CELL;
+        int winH = GRID_H * CELL + WIN_EXTRA_H;
+
+        // Get window rect to account for borders
+        RECT windowRect = { 0, 0, winW, winH };
+        AdjustWindowRect(&windowRect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+
+        int actualWidth = windowRect.right - windowRect.left;
+        int actualHeight = windowRect.bottom - windowRect.top;
+
+        SetWindowPos(g_hwnd, NULL, 0, 0, actualWidth, actualHeight,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
 
 //
 // Helpers
@@ -98,6 +131,20 @@ static void placeFoodLocked() {
 }
 
 static void resetGameLocked() {
+    // Apply settings
+    CELL = cellSize;
+    GRID_W = gridWidth;
+    GRID_H = gridHeight;
+    TICK_INTERVAL_MS_VALUE = speedOptions[speedIndex];
+    TARGET_FPS = fpsOptions[fpsIndex];
+
+    // Resize window to match new grid size
+    resizeWindow();
+
+    // Update RNG distributions
+    distW = std::uniform_int_distribution<int>(0, GRID_W - 1);
+    distH = std::uniform_int_distribution<int>(0, GRID_H - 1);
+
     currSnake.clear();
     int sx = GRID_W / 2;
     int sy = GRID_H / 2;
@@ -113,7 +160,7 @@ static void resetGameLocked() {
     score = 0;
     placeFoodLocked();
     lastTickTime = std::chrono::steady_clock::now();
-    tickDuration = TICK_INTERVAL_MS;
+    tickDuration = std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
 }
 
 //
@@ -121,7 +168,7 @@ static void resetGameLocked() {
 //
 static void gameThreadFunc() {
     using clock = std::chrono::steady_clock;
-    auto nextTick = clock::now() + TICK_INTERVAL_MS;
+    auto nextTick = clock::now() + std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
 
     while (running) {
         auto now = clock::now();
@@ -134,14 +181,14 @@ static void gameThreadFunc() {
 
             // If not active, reset the next tick time to prevent accumulated time
             if (!shouldTick) {
-                nextTick = now + TICK_INTERVAL_MS;
+                nextTick = now + std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
                 prevSnake = currSnake; // Keep in sync for rendering
             }
         }
 
         // Perform game tick if it's time
         if (shouldTick && now >= nextTick) {
-            nextTick += TICK_INTERVAL_MS;
+            nextTick += std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
 
             std::lock_guard<std::mutex> lk(stateMtx);
             if (started && !paused && !gameOver) {
@@ -183,7 +230,7 @@ static void gameThreadFunc() {
                 }
 
                 lastTickTime = clock::now();
-                tickDuration = TICK_INTERVAL_MS;
+                tickDuration = std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
             }
         }
 
@@ -214,6 +261,12 @@ struct RenderSnapshot {
     int menuSelection;
     int pauseSelection;
     int gameOverSelection;
+    int settingSelection;
+    int fpsIndex;
+    int cellSize;
+    int gridWidth;
+    int gridHeight;
+    int speedIndex;
     std::chrono::steady_clock::time_point tickTime;
     std::chrono::milliseconds tickDur;
 };
@@ -315,6 +368,12 @@ static void renderThreadFunc() {
             snap.menuSelection = menuSelection;
             snap.pauseSelection = pauseSelection;
             snap.gameOverSelection = gameOverSelection;
+            snap.settingSelection = settingSelection;
+            snap.fpsIndex = fpsIndex;
+            snap.cellSize = cellSize;
+            snap.gridWidth = gridWidth;
+            snap.gridHeight = gridHeight;
+            snap.speedIndex = speedIndex;
             snap.tickTime = lastTickTime;
             snap.tickDur = tickDuration;
         }
@@ -410,6 +469,73 @@ static void renderThreadFunc() {
                 DrawTextW(memDC, L"Exit", -1, &exitRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
                 SelectObject(memDC, oldButton);
+            }
+            // Render settings screen
+            else if (snap.state == SETTINGS) {
+                // Title
+                HFONT oldTitle = (HFONT)SelectObject(memDC, cache.menuTitleFont);
+                SetBkMode(memDC, TRANSPARENT);
+                SetTextColor(memDC, RGB(90, 220, 90));
+                RECT titleRect = { 0, 40, GRID_W * CELL, 100 };
+                DrawTextW(memDC, L"SETTINGS", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(memDC, oldTitle);
+
+                HFONT settingsFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                    DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT oldSettings = (HFONT)SelectObject(memDC, settingsFont);
+
+                int leftCol = 50;
+                int rightCol = 250;
+                int startY = 140;
+                int rowHeight = 40;
+
+                // FPS
+                SetTextColor(memDC, snap.settingSelection == 0 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"FPS:", 4);
+                std::wstring fpsVal = std::to_wstring(fpsOptions[snap.fpsIndex]);
+                SetTextColor(memDC, snap.settingSelection == 0 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, fpsVal.c_str(), (int)fpsVal.size());
+
+                // Cell Size
+                startY += rowHeight;
+                SetTextColor(memDC, snap.settingSelection == 1 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"Cell Size:", 10);
+                std::wstring cellVal = std::to_wstring(snap.cellSize);
+                SetTextColor(memDC, snap.settingSelection == 1 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, cellVal.c_str(), (int)cellVal.size());
+
+                // Grid Width
+                startY += rowHeight;
+                SetTextColor(memDC, snap.settingSelection == 2 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"Grid Width:", 11);
+                std::wstring widthVal = std::to_wstring(snap.gridWidth);
+                SetTextColor(memDC, snap.settingSelection == 2 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, widthVal.c_str(), (int)widthVal.size());
+
+                // Grid Height
+                startY += rowHeight;
+                SetTextColor(memDC, snap.settingSelection == 3 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"Grid Height:", 12);
+                std::wstring heightVal = std::to_wstring(snap.gridHeight);
+                SetTextColor(memDC, snap.settingSelection == 3 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, heightVal.c_str(), (int)heightVal.size());
+
+                // Game Speed
+                startY += rowHeight;
+                SetTextColor(memDC, snap.settingSelection == 4 ? RGB(90, 220, 90) : RGB(180, 180, 180));
+                TextOutW(memDC, leftCol, startY, L"Speed:", 6);
+                SetTextColor(memDC, snap.settingSelection == 4 ? RGB(220, 220, 220) : RGB(150, 150, 150));
+                TextOutW(memDC, rightCol, startY, speedNames[snap.speedIndex], (int)wcslen(speedNames[snap.speedIndex]));
+
+                // Back button
+                startY += rowHeight + 20;
+                SetTextColor(memDC, snap.settingSelection == 5 ? RGB(220, 90, 90) : RGB(180, 180, 180));
+                RECT backRect = { 0, startY, GRID_W * CELL, startY + 30 };
+                DrawTextW(memDC, L"< Back to Menu", -1, &backRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                SelectObject(memDC, oldSettings);
+                DeleteObject(settingsFont);
             }
             // Render game if playing
             else {
@@ -661,18 +787,13 @@ static void renderThreadFunc() {
             ReleaseDC(g_hwnd, hdc);
         }
 
-        // Frame pacing - but allow instant updates when needed
+        // Frame pacing - maintain consistent frame rate
         auto frameEnd = clock::now();
         auto frameDuration = std::chrono::duration_cast<std::chrono::milliseconds>(frameEnd - frameStart);
-        auto sleepTime = RENDER_FRAME_MS - frameDuration;
-
-        // Only sleep if we have significant time left to maintain frame rate
-        if (sleepTime.count() > 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        // Otherwise yield to not hog CPU completely but still be responsive
-        else {
-            std::this_thread::yield();
+        int targetFrameTime = 1000 / TARGET_FPS;
+        auto sleepTime = std::chrono::milliseconds(targetFrameTime) - frameDuration;
+        if (sleepTime.count() > 0) {
+            std::this_thread::sleep_for(sleepTime);
         }
     }
 }
@@ -705,11 +826,73 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     resetGameLocked();
                 }
                 else if (menuSelection == 1) {
-                    // Settings - do nothing for now
+                    // Settings
+                    gameState = SETTINGS;
+                    settingSelection = 0;
                 }
                 else if (menuSelection == 2) {
                     // Exit
                     PostMessage(hwnd, WM_CLOSE, 0, 0);
+                }
+                break;
+            }
+        }
+        else if (gameState == SETTINGS) {
+            // Settings navigation
+            switch (wParam) {
+            case VK_UP:
+            case 'W':
+                settingSelection = (settingSelection - 1 + 6) % 6;
+                break;
+            case VK_DOWN:
+            case 'S':
+                settingSelection = (settingSelection + 1) % 6;
+                break;
+            case VK_LEFT:
+            case 'A':
+                // Decrease value
+                if (settingSelection == 0) { // FPS
+                    fpsIndex = (fpsIndex - 1 + 4) % 4;
+                }
+                else if (settingSelection == 1) { // Cell Size
+                    cellSize = max(10, cellSize - 5);
+                }
+                else if (settingSelection == 2) { // Grid Width
+                    gridWidth = max(5, gridWidth - 1);
+                }
+                else if (settingSelection == 3) { // Grid Height
+                    gridHeight = max(5, gridHeight - 1);
+                }
+                else if (settingSelection == 4) { // Speed
+                    speedIndex = (speedIndex - 1 + 3) % 3;
+                }
+                break;
+            case VK_RIGHT:
+            case 'D':
+                // Increase value
+                if (settingSelection == 0) { // FPS
+                    fpsIndex = (fpsIndex + 1) % 4;
+                }
+                else if (settingSelection == 1) { // Cell Size
+                    cellSize = min(80, cellSize + 5);
+                }
+                else if (settingSelection == 2) { // Grid Width
+                    gridWidth = min(40, gridWidth + 1);
+                }
+                else if (settingSelection == 3) { // Grid Height
+                    gridHeight = min(40, gridHeight + 1);
+                }
+                else if (settingSelection == 4) { // Speed
+                    speedIndex = (speedIndex + 1) % 3;
+                }
+                break;
+            case VK_RETURN:
+            case VK_SPACE:
+            case VK_ESCAPE:
+                // Back to menu
+                if (settingSelection == 5 || wParam == VK_ESCAPE) {
+                    gameState = MENU;
+                    menuSelection = 0;
                 }
                 break;
             }

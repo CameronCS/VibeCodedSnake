@@ -16,7 +16,7 @@
 //
 // Config
 //
-static int CELL = 40;
+static int CELL = 80;
 static int GRID_W = 10;
 static int GRID_H = 10;
 static constexpr int WIN_EXTRA_H = 40;
@@ -29,7 +29,7 @@ static int TARGET_FPS = 240;
 static int settingSelection = 0; // which setting is selected
 static int fpsOptions[] = { 60, 120, 180, 240 };
 static int fpsIndex = 3; // default 240
-static int cellSize = 40; // 10-80
+static int cellSize = 80; // 60-120
 static int gridWidth = 10; // 5-40
 static int gridHeight = 10; // 5-40
 static int speedOptions[] = { 180, 120, 80 }; // easy, medium, hard
@@ -59,6 +59,7 @@ static Pt food{ 0,0 };
 static Direction dir = RIGHT;
 static Direction nextDir = RIGHT; // FIXED: queue next direction
 static bool gameOver = false;
+static bool gameWon = false;
 static bool paused = false;
 static bool started = false; // NEW: game hasn't started yet
 static int score = 0;
@@ -155,6 +156,7 @@ static void resetGameLocked() {
     dir = RIGHT;
     nextDir = RIGHT;
     gameOver = false;
+    gameWon = false;
     paused = false;
     started = false;
     score = 0;
@@ -177,7 +179,7 @@ static void gameThreadFunc() {
         bool shouldTick = false;
         {
             std::lock_guard<std::mutex> lk(stateMtx);
-            shouldTick = started && !paused && !gameOver;
+            shouldTick = started && !paused && !gameOver && !gameWon;
 
             // If not active, reset the next tick time to prevent accumulated time
             if (!shouldTick) {
@@ -191,7 +193,7 @@ static void gameThreadFunc() {
             nextTick += std::chrono::milliseconds(TICK_INTERVAL_MS_VALUE);
 
             std::lock_guard<std::mutex> lk(stateMtx);
-            if (started && !paused && !gameOver) {
+            if (started && !paused && !gameOver && !gameWon) {
                 // Apply queued direction at start of tick
                 dir = nextDir;
 
@@ -222,7 +224,14 @@ static void gameThreadFunc() {
                     currSnake.push_front(newHead);
                     if (newHead.x == food.x && newHead.y == food.y) {
                         score += 10;
-                        placeFoodLocked();
+
+                        // Check if won (snake fills entire grid)
+                        if (currSnake.size() >= (size_t)(GRID_W * GRID_H)) {
+                            gameWon = true;
+                        }
+                        else {
+                            placeFoodLocked();
+                        }
                     }
                     else {
                         currSnake.pop_back();
@@ -255,6 +264,7 @@ struct RenderSnapshot {
     FPt food;
     int score;
     bool gameOver;
+    bool gameWon;
     bool paused;
     bool started;
     GameState state;
@@ -362,6 +372,7 @@ static void renderThreadFunc() {
             snap.food = { float(food.x), float(food.y) };
             snap.score = score;
             snap.gameOver = gameOver;
+            snap.gameWon = gameWon;
             snap.paused = paused;
             snap.started = started;
             snap.state = gameState;
@@ -406,23 +417,33 @@ static void renderThreadFunc() {
 
             // Render menu if in menu state
             if (snap.state == MENU) {
-                // Title
-                HFONT oldTitle = (HFONT)SelectObject(memDC, cache.menuTitleFont);
+                // Title - scale font with window
+                int titleFontSize = max(32, min(64, (GRID_W * CELL) / 8));
+                HFONT titleFont = CreateFontW(titleFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                    DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT oldTitle = (HFONT)SelectObject(memDC, titleFont);
                 SetBkMode(memDC, TRANSPARENT);
                 SetTextColor(memDC, RGB(90, 220, 90));
-                RECT titleRect = { 0, 80, GRID_W * CELL, 180 };
+                int titleY = max(60, GRID_H * CELL / 6);
+                RECT titleRect = { 0, titleY, GRID_W * CELL, titleY + titleFontSize + 20 };
                 DrawTextW(memDC, L"SNAKE", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SelectObject(memDC, oldTitle);
+                DeleteObject(titleFont);
 
-                // Menu buttons
-                HFONT oldButton = (HFONT)SelectObject(memDC, cache.menuButtonFont);
+                // Menu buttons - scale font
+                int buttonFontSize = max(18, min(28, (GRID_W * CELL) / 16));
+                HFONT buttonFont = CreateFontW(buttonFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                    DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT oldButton = (HFONT)SelectObject(memDC, buttonFont);
 
-                // Calculate button positions
-                int buttonWidth = 200;
-                int buttonHeight = 50;
+                // Calculate button positions - scale with grid size
+                int buttonWidth = max(140, min(220, GRID_W * CELL - 100));
+                int buttonHeight = max(35, min(55, GRID_H * CELL / 9));
                 int centerX = (GRID_W * CELL) / 2;
-                int startY = 220;
-                int buttonSpacing = 70;
+                int startY = max(140, (GRID_H * CELL - (3 * buttonHeight + 2 * 65)) / 2);
+                int buttonSpacing = max(55, buttonHeight + 15);
 
                 // Play button
                 RECT playRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
@@ -469,26 +490,33 @@ static void renderThreadFunc() {
                 DrawTextW(memDC, L"Exit", -1, &exitRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
                 SelectObject(memDC, oldButton);
+                DeleteObject(buttonFont);
             }
             // Render settings screen
             else if (snap.state == SETTINGS) {
-                // Title
-                HFONT oldTitle = (HFONT)SelectObject(memDC, cache.menuTitleFont);
+                // Title - scale font
+                int titleFontSize = max(32, min(64, (GRID_W * CELL) / 8));
+                HFONT titleFont = CreateFontW(titleFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                    DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HFONT oldTitle = (HFONT)SelectObject(memDC, titleFont);
                 SetBkMode(memDC, TRANSPARENT);
                 SetTextColor(memDC, RGB(90, 220, 90));
                 RECT titleRect = { 0, 40, GRID_W * CELL, 100 };
                 DrawTextW(memDC, L"SETTINGS", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SelectObject(memDC, oldTitle);
+                DeleteObject(titleFont);
 
-                HFONT settingsFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                int settingsFontSize = max(16, min(22, (GRID_W * CELL) / 20));
+                HFONT settingsFont = CreateFontW(settingsFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                     DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                 HFONT oldSettings = (HFONT)SelectObject(memDC, settingsFont);
 
-                int leftCol = 50;
-                int rightCol = 250;
-                int startY = 140;
-                int rowHeight = 40;
+                int leftCol = max(30, GRID_W * CELL / 10);
+                int rightCol = max(200, GRID_W * CELL / 2);
+                int startY = max(120, GRID_H * CELL / 4);
+                int rowHeight = max(35, min(50, GRID_H * CELL / 10));
 
                 // FPS
                 SetTextColor(memDC, snap.settingSelection == 0 ? RGB(90, 220, 90) : RGB(180, 180, 180));
@@ -621,27 +649,30 @@ static void renderThreadFunc() {
                     }
                     DeleteObject(darkBrush);
 
-                    HFONT pauseFont = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                    int pauseFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                    HFONT pauseFont = CreateFontW(pauseFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     HFONT oldPause = (HFONT)SelectObject(memDC, pauseFont);
                     SetTextColor(memDC, RGB(220, 220, 220));
-                    RECT tr = { 0, 80, GRID_W * CELL, 140 };
+                    int pauseY = max(60, GRID_H * CELL / 6);
+                    RECT tr = { 0, pauseY, GRID_W * CELL, pauseY + pauseFontSize + 20 };
                     DrawTextW(memDC, L"PAUSED", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(memDC, oldPause);
                     DeleteObject(pauseFont);
 
                     // Pause menu buttons
-                    HFONT buttonFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    int buttonFontSize = max(18, min(24, (GRID_W * CELL) / 18));
+                    HFONT buttonFont = CreateFontW(buttonFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     HFONT oldButton = (HFONT)SelectObject(memDC, buttonFont);
 
-                    int buttonWidth = 180;
-                    int buttonHeight = 45;
+                    int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                    int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
                     int centerX = (GRID_W * CELL) / 2;
-                    int startY = 200;
-                    int buttonSpacing = 60;
+                    int startY = max(140, pauseY + pauseFontSize + 60);
+                    int buttonSpacing = max(50, buttonHeight + 15);
 
                     // Resume button
                     RECT resumeRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
@@ -687,7 +718,8 @@ static void renderThreadFunc() {
                     }
                     DeleteObject(darkBrush);
 
-                    HFONT startFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                    int startFontSize = max(24, min(36, (GRID_W * CELL) / 12));
+                    HFONT startFont = CreateFontW(startFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     HFONT oldStart = (HFONT)SelectObject(memDC, startFont);
@@ -695,7 +727,8 @@ static void renderThreadFunc() {
                     RECT tr = { 0, GRID_H * CELL / 2 - 60, GRID_W * CELL, GRID_H * CELL / 2 };
                     DrawTextW(memDC, L"SNAKE", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-                    HFONT smallFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    int instructionFontSize = max(14, min(20, (GRID_W * CELL) / 22));
+                    HFONT smallFont = CreateFontW(instructionFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     SelectObject(memDC, smallFont);
@@ -716,32 +749,40 @@ static void renderThreadFunc() {
                     FillRect(memDC, &rr, tempOver);
                     DeleteObject(tempOver);
 
-                    HFONT oldg = (HFONT)SelectObject(memDC, cache.gameOverFont);
+                    int gameOverFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                    HFONT gameOverFont = CreateFontW(gameOverFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    HFONT oldg = (HFONT)SelectObject(memDC, gameOverFont);
                     SetTextColor(memDC, RGB(220, 220, 220));
-                    RECT tr = { 0, 60, GRID_W * CELL, 120 };
+                    int titleY = max(40, GRID_H * CELL / 8);
+                    RECT tr = { 0, titleY, GRID_W * CELL, titleY + gameOverFontSize + 20 };
                     DrawTextW(memDC, L"GAME OVER", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
                     // Show score
-                    HFONT scoreTextFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    int scoreFontSize = max(18, min(24, (GRID_W * CELL) / 18));
+                    HFONT scoreTextFont = CreateFontW(scoreFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     SelectObject(memDC, scoreTextFont);
                     std::wstring scoreTxt = L"Score: " + std::to_wstring(snap.score);
-                    RECT scoreRect = { 0, 140, GRID_W * CELL, 170 };
+                    int scoreY = titleY + gameOverFontSize + 40;
+                    RECT scoreRect = { 0, scoreY, GRID_W * CELL, scoreY + 30 };
                     DrawTextW(memDC, scoreTxt.c_str(), -1, &scoreRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     DeleteObject(scoreTextFont);
 
                     // Game over menu buttons
-                    HFONT buttonFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    int buttonFontSize = max(18, min(24, (GRID_W * CELL) / 18));
+                    HFONT buttonFont = CreateFontW(buttonFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     SelectObject(memDC, buttonFont);
 
-                    int buttonWidth = 180;
-                    int buttonHeight = 45;
+                    int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                    int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
                     int centerX = (GRID_W * CELL) / 2;
-                    int startY = 200;
-                    int buttonSpacing = 60;
+                    int startY = max(140, scoreY + 50);
+                    int buttonSpacing = max(50, buttonHeight + 15);
 
                     // Restart button
                     RECT restartRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
@@ -773,6 +814,84 @@ static void renderThreadFunc() {
                     DrawTextW(memDC, L"Main Menu", -1, &menuRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
                     SelectObject(memDC, oldg);
+                    DeleteObject(gameOverFont);
+                    DeleteObject(buttonFont);
+                }
+
+                // Win overlay
+                if (snap.gameWon) {
+                    RECT rr = { 0, 0, GRID_W * CELL, GRID_H * CELL };
+                    HBRUSH tempOver = CreateSolidBrush(RGB(0, 0, 0));
+                    FillRect(memDC, &rr, tempOver);
+                    DeleteObject(tempOver);
+
+                    int winFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                    HFONT winFont = CreateFontW(winFontSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    HFONT oldg = (HFONT)SelectObject(memDC, winFont);
+                    SetTextColor(memDC, RGB(90, 220, 90));
+                    int titleY = max(40, GRID_H * CELL / 8);
+                    RECT tr = { 0, titleY, GRID_W * CELL, titleY + winFontSize + 20 };
+                    DrawTextW(memDC, L"YOU WIN!", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    // Show score
+                    int scoreFontSize = max(18, min(24, (GRID_W * CELL) / 18));
+                    HFONT scoreTextFont = CreateFontW(scoreFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    SelectObject(memDC, scoreTextFont);
+                    std::wstring scoreTxt = L"Perfect Score: " + std::to_wstring(snap.score);
+                    int scoreY = titleY + winFontSize + 40;
+                    RECT scoreRect = { 0, scoreY, GRID_W * CELL, scoreY + 30 };
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, scoreTxt.c_str(), -1, &scoreRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DeleteObject(scoreTextFont);
+
+                    // Win menu buttons
+                    int buttonFontSize = max(18, min(24, (GRID_W * CELL) / 18));
+                    HFONT buttonFont = CreateFontW(buttonFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    SelectObject(memDC, buttonFont);
+
+                    int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                    int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
+                    int centerX = (GRID_W * CELL) / 2;
+                    int startY = max(140, scoreY + 50);
+                    int buttonSpacing = max(50, buttonHeight + 15);
+
+                    // Play Again button
+                    RECT restartRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH restartBrush = CreateSolidBrush(snap.gameOverSelection == 0 ? RGB(50, 200, 50) : RGB(40, 170, 40));
+                    FillRect(memDC, &restartRect, restartBrush);
+                    DeleteObject(restartBrush);
+                    HPEN buttonPen = CreatePen(PS_SOLID, snap.gameOverSelection == 0 ? 3 : 2, RGB(90, 220, 90));
+                    HPEN oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, restartRect.left, restartRect.top, restartRect.right, restartRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Play Again", -1, &restartRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    // Menu button
+                    startY += buttonSpacing;
+                    RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH menuBrush = CreateSolidBrush(snap.gameOverSelection == 1 ? RGB(200, 50, 50) : RGB(170, 40, 40));
+                    FillRect(memDC, &menuRect, menuBrush);
+                    DeleteObject(menuBrush);
+                    buttonPen = CreatePen(PS_SOLID, snap.gameOverSelection == 1 ? 3 : 2, RGB(220, 90, 90));
+                    oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, menuRect.left, menuRect.top, menuRect.right, menuRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Main Menu", -1, &menuRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    SelectObject(memDC, oldg);
+                    DeleteObject(winFont);
                     DeleteObject(buttonFont);
                 }
             } // end of PLAYING state rendering
@@ -855,7 +974,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     fpsIndex = (fpsIndex - 1 + 4) % 4;
                 }
                 else if (settingSelection == 1) { // Cell Size
-                    cellSize = max(10, cellSize - 5);
+                    cellSize = max(60, cellSize - 5);
                 }
                 else if (settingSelection == 2) { // Grid Width
                     gridWidth = max(5, gridWidth - 1);
@@ -874,7 +993,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     fpsIndex = (fpsIndex + 1) % 4;
                 }
                 else if (settingSelection == 1) { // Cell Size
-                    cellSize = min(80, cellSize + 5);
+                    cellSize = min(120, cellSize + 5);
                 }
                 else if (settingSelection == 2) { // Grid Width
                     gridWidth = min(40, gridWidth + 1);
@@ -943,6 +1062,34 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 case VK_ESCAPE:
                     if (gameOverSelection == 0) {
                         // Restart
+                        resetGameLocked();
+                        gameOverSelection = 0;
+                    }
+                    else {
+                        // Go to menu
+                        gameState = MENU;
+                        menuSelection = 0;
+                        gameOverSelection = 0;
+                    }
+                    break;
+                }
+            }
+            else if (gameWon) {
+                // Win menu navigation (same as game over)
+                switch (wParam) {
+                case VK_UP:
+                case 'W':
+                    gameOverSelection = (gameOverSelection - 1 + 2) % 2;
+                    break;
+                case VK_DOWN:
+                case 'S':
+                    gameOverSelection = (gameOverSelection + 1) % 2;
+                    break;
+                case VK_RETURN:
+                case VK_SPACE:
+                case VK_ESCAPE:
+                    if (gameOverSelection == 0) {
+                        // Play Again
                         resetGameLocked();
                         gameOverSelection = 0;
                     }

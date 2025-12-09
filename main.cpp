@@ -1241,6 +1241,135 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         break;
     }
+    case WM_LBUTTONDOWN: {
+        std::lock_guard<std::mutex> lk(stateMtx);
+        int mouseX = LOWORD(lParam);
+        int mouseY = HIWORD(lParam);
+
+        if (gameState == MENU) {
+            // Calculate button positions (same as rendering)
+            int buttonWidth = max(140, min(220, GRID_W * CELL - 100));
+            int buttonHeight = max(35, min(55, GRID_H * CELL / 9));
+            int centerX = (GRID_W * CELL) / 2;
+            int startY = max(140, (GRID_H * CELL - (3 * buttonHeight + 2 * 65)) / 2);
+            int buttonSpacing = max(55, buttonHeight + 15);
+
+            // Play button
+            RECT playRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+            if (mouseX >= playRect.left && mouseX <= playRect.right && mouseY >= playRect.top && mouseY <= playRect.bottom) {
+                gameState = PLAYING;
+                resetGameLocked();
+            }
+
+            // Settings button
+            startY += buttonSpacing;
+            RECT settingsRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+            if (mouseX >= settingsRect.left && mouseX <= settingsRect.right && mouseY >= settingsRect.top && mouseY <= settingsRect.bottom) {
+                gameState = SETTINGS;
+                settingSelection = 0;
+            }
+
+            // Exit button
+            startY += buttonSpacing;
+            RECT exitRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+            if (mouseX >= exitRect.left && mouseX <= exitRect.right && mouseY >= exitRect.top && mouseY <= exitRect.bottom) {
+                PostMessage(hwnd, WM_CLOSE, 0, 0);
+            }
+        }
+        else if (gameState == SETTINGS) {
+            // Settings back button
+            int rowHeight = max(35, min(50, GRID_H * CELL / 10));
+            int startY = max(120, GRID_H * CELL / 4) + rowHeight * 6 + 20;
+            RECT backRect = { 0, startY, GRID_W * CELL, startY + 30 };
+            if (mouseY >= backRect.top && mouseY <= backRect.bottom) {
+                gameState = MENU;
+                menuSelection = 0;
+            }
+        }
+        else if (gameState == PLAYING) {
+            // Pause menu
+            if (paused) {
+                int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
+                int centerX = (GRID_W * CELL) / 2;
+                int pauseFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                int pauseY = max(60, GRID_H * CELL / 6);
+                int startY = max(140, pauseY + pauseFontSize + 60);
+                int buttonSpacing = max(50, buttonHeight + 15);
+
+                // Resume button
+                RECT resumeRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= resumeRect.left && mouseX <= resumeRect.right && mouseY >= resumeRect.top && mouseY <= resumeRect.bottom) {
+                    paused = false;
+                    lastTickTime = std::chrono::steady_clock::now();
+                }
+
+                // Menu button
+                startY += buttonSpacing;
+                RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= menuRect.left && mouseX <= menuRect.right && mouseY >= menuRect.top && mouseY <= menuRect.bottom) {
+                    gameState = MENU;
+                    menuSelection = 0;
+                    pauseSelection = 0;
+                }
+            }
+            // Game over menu
+            else if (gameOver) {
+                int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
+                int centerX = (GRID_W * CELL) / 2;
+                int gameOverFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                int titleY = max(40, GRID_H * CELL / 8);
+                int scoreY = titleY + gameOverFontSize + 40;
+                int startY = max(140, scoreY + 50);
+                int buttonSpacing = max(50, buttonHeight + 15);
+
+                // Restart button
+                RECT restartRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= restartRect.left && mouseX <= restartRect.right && mouseY >= restartRect.top && mouseY <= restartRect.bottom) {
+                    resetGameLocked();
+                    gameOverSelection = 0;
+                }
+
+                // Menu button
+                startY += buttonSpacing;
+                RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= menuRect.left && mouseX <= menuRect.right && mouseY >= menuRect.top && mouseY <= menuRect.bottom) {
+                    gameState = MENU;
+                    menuSelection = 0;
+                    gameOverSelection = 0;
+                }
+            }
+            // Win menu
+            else if (gameWon) {
+                int buttonWidth = max(140, min(200, GRID_W * CELL - 100));
+                int buttonHeight = max(35, min(50, GRID_H * CELL / 9));
+                int centerX = (GRID_W * CELL) / 2;
+                int winFontSize = max(32, min(48, (GRID_W * CELL) / 10));
+                int titleY = max(40, GRID_H * CELL / 8);
+                int scoreY = titleY + winFontSize + 40;
+                int startY = max(140, scoreY + 50);
+                int buttonSpacing = max(50, buttonHeight + 15);
+
+                // Play Again button
+                RECT restartRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= restartRect.left && mouseX <= restartRect.right && mouseY >= restartRect.top && mouseY <= restartRect.bottom) {
+                    resetGameLocked();
+                    gameOverSelection = 0;
+                }
+
+                // Menu button
+                startY += buttonSpacing;
+                RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                if (mouseX >= menuRect.left && mouseX <= menuRect.right && mouseY >= menuRect.top && mouseY <= menuRect.bottom) {
+                    gameState = MENU;
+                    menuSelection = 0;
+                    gameOverSelection = 0;
+                }
+            }
+        }
+        break;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         BeginPaint(hwnd, &ps);

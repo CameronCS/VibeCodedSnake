@@ -78,6 +78,8 @@ static std::uniform_int_distribution<int> distW(0, GRID_W - 1);
 static std::uniform_int_distribution<int> distH(0, GRID_H - 1);
 
 static HWND g_hwnd = nullptr;
+static int mouseX = 0;
+static int mouseY = 0;
 
 //
 // Resize window to match current grid settings
@@ -346,6 +348,8 @@ struct RenderSnapshot {
     int gridHeight;
     int fruitCount;
     int speedIndex;
+    int mouseX;
+    int mouseY;
     std::chrono::steady_clock::time_point tickTime;
     std::chrono::milliseconds tickDur;
 };
@@ -456,6 +460,8 @@ static void renderThreadFunc() {
             snap.gridHeight = gridHeight;
             snap.fruitCount = fruitCount;
             snap.speedIndex = speedIndex;
+            snap.mouseX = mouseX;
+            snap.mouseY = mouseY;
             snap.tickTime = lastTickTime;
             snap.tickDur = tickDuration;
         }
@@ -518,10 +524,12 @@ static void renderThreadFunc() {
 
                 // Play button
                 RECT playRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
-                HBRUSH playBrush = CreateSolidBrush(snap.menuSelection == 0 ? RGB(50, 200, 50) : RGB(40, 170, 40));
+                bool playHover = (snap.mouseX >= playRect.left && snap.mouseX <= playRect.right &&
+                    snap.mouseY >= playRect.top && snap.mouseY <= playRect.bottom);
+                HBRUSH playBrush = CreateSolidBrush((snap.menuSelection == 0 || playHover) ? RGB(50, 200, 50) : RGB(40, 170, 40));
                 FillRect(memDC, &playRect, playBrush);
                 DeleteObject(playBrush);
-                HPEN buttonPen = CreatePen(PS_SOLID, snap.menuSelection == 0 ? 3 : 2, RGB(90, 220, 90));
+                HPEN buttonPen = CreatePen(PS_SOLID, (snap.menuSelection == 0 || playHover) ? 3 : 2, RGB(90, 220, 90));
                 HPEN oldButtonPen = (HPEN)SelectObject(memDC, buttonPen);
                 SelectObject(memDC, GetStockObject(NULL_BRUSH));
                 Rectangle(memDC, playRect.left, playRect.top, playRect.right, playRect.bottom);
@@ -533,10 +541,12 @@ static void renderThreadFunc() {
                 // Settings button
                 startY += buttonSpacing;
                 RECT settingsRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
-                HBRUSH settingsBrush = CreateSolidBrush(snap.menuSelection == 1 ? RGB(50, 200, 50) : RGB(40, 170, 40));
+                bool settingsHover = (snap.mouseX >= settingsRect.left && snap.mouseX <= settingsRect.right &&
+                    snap.mouseY >= settingsRect.top && snap.mouseY <= settingsRect.bottom);
+                HBRUSH settingsBrush = CreateSolidBrush((snap.menuSelection == 1 || settingsHover) ? RGB(50, 200, 50) : RGB(40, 170, 40));
                 FillRect(memDC, &settingsRect, settingsBrush);
                 DeleteObject(settingsBrush);
-                buttonPen = CreatePen(PS_SOLID, snap.menuSelection == 1 ? 3 : 2, RGB(90, 220, 90));
+                buttonPen = CreatePen(PS_SOLID, (snap.menuSelection == 1 || settingsHover) ? 3 : 2, RGB(90, 220, 90));
                 oldButtonPen = (HPEN)SelectObject(memDC, buttonPen);
                 SelectObject(memDC, GetStockObject(NULL_BRUSH));
                 Rectangle(memDC, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom);
@@ -548,10 +558,12 @@ static void renderThreadFunc() {
                 // Exit button
                 startY += buttonSpacing;
                 RECT exitRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
-                HBRUSH exitBrush = CreateSolidBrush(snap.menuSelection == 2 ? RGB(200, 50, 50) : RGB(170, 40, 40));
+                bool exitHover = (snap.mouseX >= exitRect.left && snap.mouseX <= exitRect.right &&
+                    snap.mouseY >= exitRect.top && snap.mouseY <= exitRect.bottom);
+                HBRUSH exitBrush = CreateSolidBrush((snap.menuSelection == 2 || exitHover) ? RGB(200, 50, 50) : RGB(170, 40, 40));
                 FillRect(memDC, &exitRect, exitBrush);
                 DeleteObject(exitBrush);
-                buttonPen = CreatePen(PS_SOLID, snap.menuSelection == 2 ? 3 : 2, RGB(220, 90, 90));
+                buttonPen = CreatePen(PS_SOLID, (snap.menuSelection == 2 || exitHover) ? 3 : 2, RGB(220, 90, 90));
                 oldButtonPen = (HPEN)SelectObject(memDC, buttonPen);
                 SelectObject(memDC, GetStockObject(NULL_BRUSH));
                 Rectangle(memDC, exitRect.left, exitRect.top, exitRect.right, exitRect.bottom);
@@ -588,52 +600,139 @@ static void renderThreadFunc() {
                 int rightCol = max(200, GRID_W * CELL / 2);
                 int startY = max(120, GRID_H * CELL / 4);
                 int rowHeight = max(35, min(50, GRID_H * CELL / 10));
+                int arrowLeftX = rightCol - 30;
+                int arrowRightX = rightCol + 50;
+                int arrowWidth = 20;
 
                 // FPS
                 SetTextColor(memDC, snap.settingSelection == 0 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"FPS:", 4);
+
+                // Left arrow with hover
+                bool fpsLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, fpsLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 std::wstring fpsVal = std::to_wstring(fpsOptions[snap.fpsIndex]);
                 SetTextColor(memDC, snap.settingSelection == 0 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, fpsVal.c_str(), (int)fpsVal.size());
+
+                // Right arrow with hover
+                bool fpsRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, fpsRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Cell Size
                 startY += rowHeight;
                 SetTextColor(memDC, snap.settingSelection == 1 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"Cell Size:", 10);
+
+                // Left arrow with hover
+                bool cellLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, cellLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 std::wstring cellVal = std::to_wstring(snap.cellSize);
                 SetTextColor(memDC, snap.settingSelection == 1 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, cellVal.c_str(), (int)cellVal.size());
+
+                // Right arrow with hover
+                bool cellRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, cellRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Grid Width
                 startY += rowHeight;
                 SetTextColor(memDC, snap.settingSelection == 2 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"Grid Width:", 11);
+
+                // Left arrow with hover
+                bool widthLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, widthLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 std::wstring widthVal = std::to_wstring(snap.gridWidth);
                 SetTextColor(memDC, snap.settingSelection == 2 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, widthVal.c_str(), (int)widthVal.size());
+
+                // Right arrow with hover
+                bool widthRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, widthRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Grid Height
                 startY += rowHeight;
                 SetTextColor(memDC, snap.settingSelection == 3 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"Grid Height:", 12);
+
+                // Left arrow with hover
+                bool heightLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, heightLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 std::wstring heightVal = std::to_wstring(snap.gridHeight);
                 SetTextColor(memDC, snap.settingSelection == 3 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, heightVal.c_str(), (int)heightVal.size());
+
+                // Right arrow with hover
+                bool heightRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, heightRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Game Speed
                 startY += rowHeight;
                 SetTextColor(memDC, snap.settingSelection == 4 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"Speed:", 6);
+
+                // Left arrow with hover
+                bool speedLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, speedLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 SetTextColor(memDC, snap.settingSelection == 4 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, speedNames[snap.speedIndex], (int)wcslen(speedNames[snap.speedIndex]));
+
+                // Right arrow with hover
+                bool speedRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, speedRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Fruit Count
                 startY += rowHeight;
                 SetTextColor(memDC, snap.settingSelection == 5 ? RGB(90, 220, 90) : RGB(180, 180, 180));
                 TextOutW(memDC, leftCol, startY, L"Fruit Count:", 12);
+
+                // Left arrow with hover
+                bool fruitLeftHover = (snap.mouseX >= arrowLeftX && snap.mouseX <= arrowLeftX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, fruitLeftHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowLeftX, startY, L"<", 1);
+
+                // Value
                 std::wstring fruitVal = std::to_wstring(snap.fruitCount);
                 SetTextColor(memDC, snap.settingSelection == 5 ? RGB(220, 220, 220) : RGB(150, 150, 150));
                 TextOutW(memDC, rightCol, startY, fruitVal.c_str(), (int)fruitVal.size());
+
+                // Right arrow with hover
+                bool fruitRightHover = (snap.mouseX >= arrowRightX && snap.mouseX <= arrowRightX + arrowWidth &&
+                    snap.mouseY >= startY && snap.mouseY <= startY + rowHeight);
+                SetTextColor(memDC, fruitRightHover ? RGB(120, 255, 120) : RGB(90, 220, 90));
+                TextOutW(memDC, arrowRightX, startY, L">", 1);
 
                 // Back button
                 startY += rowHeight + 20;
@@ -1241,6 +1340,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         break;
     }
+    case WM_MOUSEMOVE: {
+        mouseX = LOWORD(lParam);
+        mouseY = HIWORD(lParam);
+        break;
+    }
     case WM_LBUTTONDOWN: {
         std::lock_guard<std::mutex> lk(stateMtx);
         int mouseX = LOWORD(lParam);
@@ -1277,10 +1381,69 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
         }
         else if (gameState == SETTINGS) {
-            // Settings back button
+            // Settings value adjustment via arrow clicks
+            int leftCol = max(30, GRID_W * CELL / 10);
+            int rightCol = max(200, GRID_W * CELL / 2);
+            int startY = max(120, GRID_H * CELL / 4);
             int rowHeight = max(35, min(50, GRID_H * CELL / 10));
-            int startY = max(120, GRID_H * CELL / 4) + rowHeight * 6 + 20;
-            RECT backRect = { 0, startY, GRID_W * CELL, startY + 30 };
+            int arrowLeftX = rightCol - 30;
+            int arrowRightX = rightCol + 50;
+            int arrowWidth = 20; // Clickable width for arrows
+
+            // Check each setting row
+            for (int i = 0; i < 6; i++) {
+                int rowY = startY + (i * rowHeight);
+                if (mouseY >= rowY && mouseY <= rowY + rowHeight) {
+                    // Left arrow click (decrease)
+                    if (mouseX >= arrowLeftX && mouseX <= arrowLeftX + arrowWidth) {
+                        if (i == 0) { // FPS
+                            fpsIndex = (fpsIndex - 1 + 4) % 4;
+                        }
+                        else if (i == 1) { // Cell Size
+                            cellSize = max(60, cellSize - 5);
+                        }
+                        else if (i == 2) { // Grid Width
+                            gridWidth = max(5, gridWidth - 1);
+                        }
+                        else if (i == 3) { // Grid Height
+                            gridHeight = max(5, gridHeight - 1);
+                        }
+                        else if (i == 4) { // Speed
+                            speedIndex = (speedIndex - 1 + 3) % 3;
+                        }
+                        else if (i == 5) { // Fruit Count
+                            fruitCount = max(1, fruitCount - 1);
+                        }
+                    }
+                    // Right arrow click (increase)
+                    else if (mouseX >= arrowRightX && mouseX <= arrowRightX + arrowWidth) {
+                        if (i == 0) { // FPS
+                            fpsIndex = (fpsIndex + 1) % 4;
+                        }
+                        else if (i == 1) { // Cell Size
+                            cellSize = min(120, cellSize + 5);
+                        }
+                        else if (i == 2) { // Grid Width
+                            gridWidth = min(40, gridWidth + 1);
+                        }
+                        else if (i == 3) { // Grid Height
+                            gridHeight = min(40, gridHeight + 1);
+                        }
+                        else if (i == 4) { // Speed
+                            speedIndex = (speedIndex + 1) % 3;
+                        }
+                        else if (i == 5) { // Fruit Count
+                            fruitCount = min(15, fruitCount + 1);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Settings back button
+            int rowHeight2 = max(35, min(50, GRID_H * CELL / 10));
+            int startY2 = max(120, GRID_H * CELL / 4) + rowHeight2 * 6 + 20;
+            RECT backRect = { 0, startY2, GRID_W * CELL, startY2 + 30 };
             if (mouseY >= backRect.top && mouseY <= backRect.bottom) {
                 gameState = MENU;
                 menuSelection = 0;

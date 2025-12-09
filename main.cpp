@@ -38,6 +38,8 @@ enum GameState { MENU, PLAYING };
 //
 static GameState gameState = MENU;
 static int menuSelection = 0; // 0=Play, 1=Settings, 2=Exit
+static int pauseSelection = 0; // 0=Resume, 1=Menu
+static int gameOverSelection = 0; // 0=Restart, 1=Menu
 static std::deque<Pt> currSnake;
 static std::deque<Pt> prevSnake;
 static Pt food{ 0,0 };
@@ -210,6 +212,8 @@ struct RenderSnapshot {
     bool started;
     GameState state;
     int menuSelection;
+    int pauseSelection;
+    int gameOverSelection;
     std::chrono::steady_clock::time_point tickTime;
     std::chrono::milliseconds tickDur;
 };
@@ -309,6 +313,8 @@ static void renderThreadFunc() {
             snap.started = started;
             snap.state = gameState;
             snap.menuSelection = menuSelection;
+            snap.pauseSelection = pauseSelection;
+            snap.gameOverSelection = gameOverSelection;
             snap.tickTime = lastTickTime;
             snap.tickDur = tickDuration;
         }
@@ -479,49 +485,81 @@ static void renderThreadFunc() {
 
                 // Paused overlay (semi-transparent)
                 if (snap.paused && snap.started) {
-                    // Darken screen
-                    for (int y = 0; y < GRID_H * CELL; y++) {
-                        for (int x = 0; x < GRID_W * CELL; x++) {
-                            COLORREF bg = GetPixel(memDC, x, y);
-                            int r = GetRValue(bg) * 3 / 10;
-                            int g = GetGValue(bg) * 3 / 10;
-                            int b = GetBValue(bg) * 3 / 10;
-                            SetPixel(memDC, x, y, RGB(r, g, b));
-                        }
+                    // Fast semi-transparent overlay
+                    RECT rr = { 0, 0, GRID_W * CELL, GRID_H * CELL };
+                    HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
+                    // Draw multiple thin overlays for transparency effect
+                    BLENDFUNCTION blend = { AC_SRC_OVER, 0, 100, 0 };
+                    for (int i = 0; i < 3; i++) {
+                        FillRect(memDC, &rr, darkBrush);
                     }
+                    DeleteObject(darkBrush);
 
                     HFONT pauseFont = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                         DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
                     HFONT oldPause = (HFONT)SelectObject(memDC, pauseFont);
                     SetTextColor(memDC, RGB(220, 220, 220));
-                    RECT tr = { 0, GRID_H * CELL / 2 - 60, GRID_W * CELL, GRID_H * CELL / 2 };
+                    RECT tr = { 0, 80, GRID_W * CELL, 140 };
                     DrawTextW(memDC, L"PAUSED", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-                    HFONT smallFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-                    SelectObject(memDC, smallFont);
-                    RECT tr2 = { 0, GRID_H * CELL / 2 + 10, GRID_W * CELL, GRID_H * CELL / 2 + 50 };
-                    DrawTextW(memDC, L"Press ESC to resume", -1, &tr2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
                     SelectObject(memDC, oldPause);
                     DeleteObject(pauseFont);
-                    DeleteObject(smallFont);
+
+                    // Pause menu buttons
+                    HFONT buttonFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    HFONT oldButton = (HFONT)SelectObject(memDC, buttonFont);
+
+                    int buttonWidth = 180;
+                    int buttonHeight = 45;
+                    int centerX = (GRID_W * CELL) / 2;
+                    int startY = 200;
+                    int buttonSpacing = 60;
+
+                    // Resume button
+                    RECT resumeRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH resumeBrush = CreateSolidBrush(snap.pauseSelection == 0 ? RGB(50, 200, 50) : RGB(40, 170, 40));
+                    FillRect(memDC, &resumeRect, resumeBrush);
+                    DeleteObject(resumeBrush);
+                    HPEN buttonPen = CreatePen(PS_SOLID, snap.pauseSelection == 0 ? 3 : 2, RGB(90, 220, 90));
+                    HPEN oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, resumeRect.left, resumeRect.top, resumeRect.right, resumeRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Resume", -1, &resumeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    // Menu button
+                    startY += buttonSpacing;
+                    RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH menuBrush = CreateSolidBrush(snap.pauseSelection == 1 ? RGB(200, 50, 50) : RGB(170, 40, 40));
+                    FillRect(memDC, &menuRect, menuBrush);
+                    DeleteObject(menuBrush);
+                    buttonPen = CreatePen(PS_SOLID, snap.pauseSelection == 1 ? 3 : 2, RGB(220, 90, 90));
+                    oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, menuRect.left, menuRect.top, menuRect.right, menuRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Main Menu", -1, &menuRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    SelectObject(memDC, oldButton);
+                    DeleteObject(buttonFont);
                 }
 
                 // Not started overlay (semi-transparent)
                 if (!snap.started) {
-                    // Lighter darken
-                    for (int y = 0; y < GRID_H * CELL; y++) {
-                        for (int x = 0; x < GRID_W * CELL; x++) {
-                            COLORREF bg = GetPixel(memDC, x, y);
-                            int r = GetRValue(bg) * 4 / 10;
-                            int g = GetGValue(bg) * 4 / 10;
-                            int b = GetBValue(bg) * 4 / 10;
-                            SetPixel(memDC, x, y, RGB(r, g, b));
-                        }
+                    // Fast semi-transparent overlay
+                    RECT rr = { 0, 0, GRID_W * CELL, GRID_H * CELL };
+                    HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
+                    // Draw overlay twice for lighter darkness
+                    for (int i = 0; i < 2; i++) {
+                        FillRect(memDC, &rr, darkBrush);
                     }
+                    DeleteObject(darkBrush);
 
                     HFONT startFont = CreateFontW(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -554,9 +592,62 @@ static void renderThreadFunc() {
 
                     HFONT oldg = (HFONT)SelectObject(memDC, cache.gameOverFont);
                     SetTextColor(memDC, RGB(220, 220, 220));
-                    RECT tr = { 0, GRID_H * CELL / 2 - 40, GRID_W * CELL, GRID_H * CELL / 2 + 40 };
+                    RECT tr = { 0, 60, GRID_W * CELL, 120 };
                     DrawTextW(memDC, L"GAME OVER", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    // Show score
+                    HFONT scoreTextFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    SelectObject(memDC, scoreTextFont);
+                    std::wstring scoreTxt = L"Score: " + std::to_wstring(snap.score);
+                    RECT scoreRect = { 0, 140, GRID_W * CELL, 170 };
+                    DrawTextW(memDC, scoreTxt.c_str(), -1, &scoreRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DeleteObject(scoreTextFont);
+
+                    // Game over menu buttons
+                    HFONT buttonFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                    SelectObject(memDC, buttonFont);
+
+                    int buttonWidth = 180;
+                    int buttonHeight = 45;
+                    int centerX = (GRID_W * CELL) / 2;
+                    int startY = 200;
+                    int buttonSpacing = 60;
+
+                    // Restart button
+                    RECT restartRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH restartBrush = CreateSolidBrush(snap.gameOverSelection == 0 ? RGB(50, 200, 50) : RGB(40, 170, 40));
+                    FillRect(memDC, &restartRect, restartBrush);
+                    DeleteObject(restartBrush);
+                    HPEN buttonPen = CreatePen(PS_SOLID, snap.gameOverSelection == 0 ? 3 : 2, RGB(90, 220, 90));
+                    HPEN oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, restartRect.left, restartRect.top, restartRect.right, restartRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Restart", -1, &restartRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    // Menu button
+                    startY += buttonSpacing;
+                    RECT menuRect = { centerX - buttonWidth / 2, startY, centerX + buttonWidth / 2, startY + buttonHeight };
+                    HBRUSH menuBrush = CreateSolidBrush(snap.gameOverSelection == 1 ? RGB(200, 50, 50) : RGB(170, 40, 40));
+                    FillRect(memDC, &menuRect, menuBrush);
+                    DeleteObject(menuBrush);
+                    buttonPen = CreatePen(PS_SOLID, snap.gameOverSelection == 1 ? 3 : 2, RGB(220, 90, 90));
+                    oldPen = (HPEN)SelectObject(memDC, buttonPen);
+                    SelectObject(memDC, GetStockObject(NULL_BRUSH));
+                    Rectangle(memDC, menuRect.left, menuRect.top, menuRect.right, menuRect.bottom);
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(buttonPen);
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    DrawTextW(memDC, L"Main Menu", -1, &menuRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
                     SelectObject(memDC, oldg);
+                    DeleteObject(buttonFont);
                 }
             } // end of PLAYING state rendering
 
@@ -625,56 +716,108 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         else {
             // Game controls
-            switch (wParam) {
-            case VK_ESCAPE:
-                // Toggle pause or go back to menu
-                if (started && !gameOver) {
-                    paused = !paused;
-                    if (!paused) {
+            if (paused) {
+                // Pause menu navigation
+                switch (wParam) {
+                case VK_UP:
+                case 'W':
+                    pauseSelection = (pauseSelection - 1 + 2) % 2;
+                    break;
+                case VK_DOWN:
+                case 'S':
+                    pauseSelection = (pauseSelection + 1) % 2;
+                    break;
+                case VK_RETURN:
+                case VK_SPACE:
+                case VK_ESCAPE:
+                    if (pauseSelection == 0) {
+                        // Resume
+                        paused = false;
                         lastTickTime = std::chrono::steady_clock::now();
                     }
+                    else {
+                        // Go to menu
+                        gameState = MENU;
+                        menuSelection = 0;
+                        pauseSelection = 0;
+                    }
+                    break;
                 }
-                else if (gameOver) {
-                    // Go back to menu from game over
-                    gameState = MENU;
-                    menuSelection = 0;
+            }
+            else if (gameOver) {
+                // Game over menu navigation
+                switch (wParam) {
+                case VK_UP:
+                case 'W':
+                    gameOverSelection = (gameOverSelection - 1 + 2) % 2;
+                    break;
+                case VK_DOWN:
+                case 'S':
+                    gameOverSelection = (gameOverSelection + 1) % 2;
+                    break;
+                case VK_RETURN:
+                case VK_SPACE:
+                case VK_ESCAPE:
+                    if (gameOverSelection == 0) {
+                        // Restart
+                        resetGameLocked();
+                        gameOverSelection = 0;
+                    }
+                    else {
+                        // Go to menu
+                        gameState = MENU;
+                        menuSelection = 0;
+                        gameOverSelection = 0;
+                    }
+                    break;
                 }
-                break;
-            case VK_UP:
-            case 'W':
-                if (!started) {
-                    started = true;
-                    lastTickTime = std::chrono::steady_clock::now();
+            }
+            else {
+                // Normal game controls
+                switch (wParam) {
+                case VK_ESCAPE:
+                    // Pause game
+                    if (started) {
+                        paused = true;
+                        pauseSelection = 0;
+                    }
+                    break;
+                case VK_UP:
+                case 'W':
+                    if (!started) {
+                        started = true;
+                        lastTickTime = std::chrono::steady_clock::now();
+                    }
+                    if (dir != DOWN) nextDir = UP;
+                    break;
+                case VK_DOWN:
+                case 'S':
+                    if (!started) {
+                        started = true;
+                        lastTickTime = std::chrono::steady_clock::now();
+                    }
+                    if (dir != UP) nextDir = DOWN;
+                    break;
+                case VK_LEFT:
+                case 'A':
+                    if (!started) {
+                        started = true;
+                        lastTickTime = std::chrono::steady_clock::now();
+                    }
+                    if (dir != RIGHT) nextDir = LEFT;
+                    break;
+                case VK_RIGHT:
+                case 'D':
+                    if (!started) {
+                        started = true;
+                        lastTickTime = std::chrono::steady_clock::now();
+                    }
+                    if (dir != LEFT) nextDir = RIGHT;
+                    break;
+                case 'R':
+                    resetGameLocked();
+                    break;
                 }
-                if (dir != DOWN) nextDir = UP;
-                break;
-            case VK_DOWN:
-            case 'S':
-                if (!started) {
-                    started = true;
-                    lastTickTime = std::chrono::steady_clock::now();
-                }
-                if (dir != UP) nextDir = DOWN;
-                break;
-            case VK_LEFT:
-            case 'A':
-                if (!started) {
-                    started = true;
-                    lastTickTime = std::chrono::steady_clock::now();
-                }
-                if (dir != RIGHT) nextDir = LEFT;
-                break;
-            case VK_RIGHT:
-            case 'D':
-                if (!started) {
-                    started = true;
-                    lastTickTime = std::chrono::steady_clock::now();
-                }
-                if (dir != LEFT) nextDir = RIGHT;
-                break;
-            case 'R':
-                resetGameLocked();
-                break;
             }
         }
         break;
